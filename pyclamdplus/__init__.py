@@ -25,6 +25,7 @@ Pythonic interface to the Clamav daemon.
 
 from os import path
 import socket
+import struct
 
 __all__ = ("ClamdNetworkConnection", "ClamdUNIXConnection",
            "PyclamdplusException", "ConnectionError", "RequestError",
@@ -232,6 +233,10 @@ class ClamdConnection(object):
         else:
             method = "SCAN"
         result = self._send_data("%s %s" % (method, file), auto_close=False)
+        
+        self._complete_scan(result)
+    
+    def _complete_scan(self, result):
         infected_files = {}
         
         try:
@@ -249,9 +254,83 @@ class ClamdConnection(object):
             self._socket.close()
         
         return infected_files
-    
-    #}
 
+    def scan_open_file(self, fp, size):
+        """
+        Scan an open file object.
+        
+        :param fp: The file object to be scanned.
+        :type file pointer
+        :param size: The size of the object to be scanned.
+        :type integer
+        :param windowsize: The amount of data to send at once.
+        :type integer
+        :raises RequestError: If the buffer could not be scanned.
+        :return: The infected files.
+        :rtype: dict
+        
+        The result will be a dictionary whose keys are the file paths and the
+        items are the viruses detected.
+        
+        """
+        
+        method = "nINSTREAM\n"
+        windowsize=1024*1024
+        try:
+            self._init_socket()
+            self._socket.send(method)
+            tobesent = size
+            while tobesent > 0:
+                thiswindow = min(windowsize, tobesent)
+                windowbytes = fp.read(thiswindow)
+                print len(windowbytes)
+                self._socket.send(struct.pack("!I",len(windowbytes)))
+                bytessent = self._socket.send(windowbytes)
+                tobesent -= bytessent
+                if bytessent <= 0:
+                    print "original size", size
+                    print "tobesent", tobesent
+                    print "thiswindow", thiswindow
+                    print "bytessent", bytessent
+                    raise RequestError("buffer too long")
+                    
+            #finish INSTREAM
+            self._socket.send("\0\0\0\0")
+            result = self._retrieve_data(auto_close=False)
+        except socket.error:
+            raise RequestError('Unable to scan stream')
+            
+        return self._complete_scan(result)            
+        
+    
+    def scan_buffer(self, data):
+        """
+        Scan a memory buffer.
+        
+        :param data: The buffer to be scanned.
+        :type string: basestring
+        :raises RequestError: If the buffer could not be scanned.
+        :return: The infected files.
+        :rtype: dict
+        
+        The result will be a dictionary whose keys are the file paths and the
+        items are the viruses detected.
+        
+        """
+        try:
+            #Use INSTREAM method
+            #Send <length><data><length=0>, lengths are 4 bytes network byte order
+            method = "nINSTREAM\n"
+            datalen = struct.pack("!I",len(data))
+            zerolen = struct.pack("!I",0)
+            result = self._send_data("%s%s%s%s" % (
+                    method, datalen, data, zerolen),
+                    auto_close=False)
+        except socket.error, ex:
+            print ex
+            raise RequestError('Unable to scan stream, stream processing denied')
+            
+        return self._complete_scan(result)            
 
 class ClamdNetworkConnection(ClamdConnection):
     """
