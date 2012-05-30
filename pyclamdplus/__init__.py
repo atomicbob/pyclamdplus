@@ -234,7 +234,7 @@ class ClamdConnection(object):
             method = "SCAN"
         result = self._send_data("%s %s" % (method, file), auto_close=False)
         
-        self._complete_scan(result)
+        return self._complete_scan(result)
     
     def _complete_scan(self, result):
         infected_files = {}
